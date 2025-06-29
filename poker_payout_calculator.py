@@ -31,7 +31,7 @@ class PokerPayoutCalculator:
     def __init__(self):
         self.root = ctk.CTk()
         self.root.title("🃏 Poker Payout Calculator")
-        self.root.geometry("1200x700")
+        self.root.geometry("1200x1200")
         self.root.resizable(True, True)
         self.root.configure(fg_color=POKER_COLORS["felt_green"])
         
@@ -44,6 +44,13 @@ class PokerPayoutCalculator:
         self.buy_in = tk.DoubleVar(value=20.0)
         self.food_per_player = tk.DoubleVar(value=5.0)
         self.bounty_per_player = tk.DoubleVar(value=2.0)
+        
+        # Timer variables
+        self.game_duration = tk.IntVar(value=180)  # Default 3 hours in minutes
+        self.current_time = 0  # Current time in seconds
+        self.timer_running = False
+        self.timer_job = None
+        self.timer_direction = tk.StringVar(value="countdown")  # countdown or countup
         
         # Weights window reference
         self.weights_window = None
@@ -60,17 +67,67 @@ class PokerPayoutCalculator:
         self.food_per_player.trace_add("write", self.on_value_change)
         self.bounty_per_player.trace_add("write", self.on_value_change)
         
-        # Initial calculation
+        # Initial calculation and display updates
+        self.update_total_per_player()
         self.calculate_payouts()
+        self.reset_timer()  # Initialize timer
+        
+    def create_label(self, parent, text, size=12, weight="normal", color="card_white", **pack_kwargs):
+        """Helper method to create consistently styled labels"""
+        label = ctk.CTkLabel(
+            parent,
+            text=text,
+            font=ctk.CTkFont(size=size, weight=weight),
+            text_color=POKER_COLORS[color]
+        )
+        if pack_kwargs:
+            label.pack(**pack_kwargs)
+        return label
+    
+    def create_title_label(self, parent, text, emoji="", size=18, **pack_kwargs):
+        """Helper method to create title labels with consistent styling"""
+        title_text = f"{emoji} {text}" if emoji else text
+        return self.create_label(
+            parent, 
+            title_text, 
+            size=size, 
+            weight="bold", 
+            color="gold",
+            **pack_kwargs
+        )
+    
+    def create_entry_row(self, parent, label_text, variable, width=100):
+        """Helper method to create label + entry rows"""
+        row_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        row_frame.pack(fill="x", padx=20, pady=5)
+        
+        self.create_label(row_frame, label_text).pack(side="left")
+        
+        entry = ctk.CTkEntry(
+            row_frame,
+            textvariable=variable,
+            width=width,
+            fg_color=POKER_COLORS["dark_green"],
+            border_color=POKER_COLORS["accent_green"]
+        )
+        entry.pack(side="right")
+        return row_frame
+    
+    def safe_get_value(self, variable, default=0.0):
+        """Safely get value from tkinter variable with fallback"""
+        try:
+            return variable.get()
+        except tk.TclError:
+            return default
         
     def setup_ui(self):
-        """Setup the user interface with left controls and right results"""
+        """Setup the user interface with left controls, middle results, and right timer/chips"""
         # Main horizontal container
         main_container = ctk.CTkFrame(self.root, fg_color="transparent")
         main_container.pack(fill="both", expand=True, padx=20, pady=20)
         
         # Left side - Controls and Bank
-        left_frame = ctk.CTkFrame(main_container, fg_color="transparent", width=500)
+        left_frame = ctk.CTkFrame(main_container, fg_color="transparent", width=475)
         left_frame.pack(side="left", fill="y", padx=(0, 10))
         left_frame.pack_propagate(False)
         
@@ -82,29 +139,41 @@ class PokerPayoutCalculator:
         self.bank_frame = ctk.CTkFrame(left_frame, fg_color=POKER_COLORS["dark_green"])
         self.bank_frame.pack(fill="both", expand=True)
         
-        # Right side - Results
-        right_frame = ctk.CTkFrame(main_container, fg_color=POKER_COLORS["medium_green"])
-        right_frame.pack(side="right", fill="both", expand=True)
+        # Middle - Tournament Results
+        middle_frame = ctk.CTkFrame(main_container, fg_color=POKER_COLORS["medium_green"], width=400)
+        middle_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        middle_frame.pack_propagate(False)
         
-        # Setup left side controls
+        # Right side - Timer and Blinds
+        right_frame = ctk.CTkFrame(main_container, fg_color="transparent", width=350)
+        right_frame.pack(side="right", fill="y")
+        right_frame.pack_propagate(False)
+        
+        # Timer frame (top part of right side)
+        timer_frame = ctk.CTkFrame(right_frame, fg_color=POKER_COLORS["dark_green"])
+        timer_frame.pack(fill="x", pady=(0, 10))
+        
+        # Blinds frame (bottom part of right side)
+        blinds_frame = ctk.CTkFrame(right_frame, fg_color=POKER_COLORS["dark_green"])
+        blinds_frame.pack(fill="both", expand=True)
+        
+        # Setup all sections
         self.setup_controls(controls_frame)
-        
-        # Setup bank section
         self.setup_bank(self.bank_frame)
-        
-        # Setup right side results
-        self.setup_results(right_frame)
+        self.setup_results(middle_frame)
+        self.setup_timer(timer_frame)
+        self.setup_blinds(blinds_frame)
         
     def setup_controls(self, parent):
         """Setup the control panel on the left side"""
         # Title
-        title_label = ctk.CTkLabel(
+        title_label = self.create_title_label(
             parent, 
-            text="🃏 Poker Payout Calculator", 
-            font=ctk.CTkFont(size=24, weight="bold"),
-            text_color=POKER_COLORS["gold"]
+            "Poker Payout Calculator", 
+            "🃏", 
+            size=24, 
+            pady=(20, 30)
         )
-        title_label.pack(pady=(20, 30))
         
         # Create control sections
         self.create_player_section(parent)
@@ -114,13 +183,13 @@ class PokerPayoutCalculator:
     def setup_results(self, parent):
         """Setup the results panel on the right side"""
         # Results title
-        self.results_title = ctk.CTkLabel(
+        self.results_title = self.create_title_label(
             parent,
-            text="💰 Tournament Payouts",
-            font=ctk.CTkFont(size=20, weight="bold"),
-            text_color=POKER_COLORS["gold"]
+            "Tournament Payouts",
+            "💰",
+            size=20,
+            pady=(20, 15)
         )
-        self.results_title.pack(pady=(20, 15))
         
         # Scrollable frame for results
         self.results_scroll = ctk.CTkScrollableFrame(
@@ -173,90 +242,48 @@ class PokerPayoutCalculator:
         pool_frame = ctk.CTkFrame(parent, fg_color=POKER_COLORS["light_green"])
         pool_frame.pack(fill="x", pady=(0, 15), padx=20)
         
-        pool_title = ctk.CTkLabel(
-            pool_frame, 
-            text="💵 Pool Configuration", 
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=POKER_COLORS["card_white"]
+        self.create_title_label(pool_frame, "Pool Configuration", "💵", size=16, pady=(15, 10))
+        
+        # Create entry rows using helper method
+        self.create_entry_row(pool_frame, "Buy-in per player ($):", self.buy_in)
+        self.create_entry_row(pool_frame, "Food pool per player ($):", self.food_per_player)
+        self.create_entry_row(pool_frame, "Bounty per player ($):", self.bounty_per_player)
+        
+        # Total per player display
+        total_frame = ctk.CTkFrame(pool_frame, fg_color=POKER_COLORS["dark_green"], corner_radius=8)
+        total_frame.pack(fill="x", padx=20, pady=(10, 15))
+        
+        self.create_label(
+            total_frame,
+            "💳 Total Due Per Player:",
+            size=14,
+            weight="bold"
+        ).pack(side="left", padx=15, pady=8)
+        
+        self.total_per_player_label = self.create_label(
+            total_frame,
+            "$0.00",
+            size=16,
+            weight="bold",
+            color="gold"
         )
-        pool_title.pack(pady=(15, 10))
-        
-        # Buy-in entry
-        buy_in_frame = ctk.CTkFrame(pool_frame, fg_color="transparent")
-        buy_in_frame.pack(fill="x", padx=20, pady=5)
-        
-        ctk.CTkLabel(
-            buy_in_frame, 
-            text="Buy-in per player ($):",
-            text_color=POKER_COLORS["card_white"]
-        ).pack(side="left")
-        buy_in_entry = ctk.CTkEntry(
-            buy_in_frame, 
-            textvariable=self.buy_in, 
-            width=100,
-            fg_color=POKER_COLORS["dark_green"],
-            border_color=POKER_COLORS["accent_green"]
-        )
-        buy_in_entry.pack(side="right")
-        
-        # Food pool entry
-        food_frame = ctk.CTkFrame(pool_frame, fg_color="transparent")
-        food_frame.pack(fill="x", padx=20, pady=5)
-        
-        ctk.CTkLabel(
-            food_frame, 
-            text="Food pool per player ($):",
-            text_color=POKER_COLORS["card_white"]
-        ).pack(side="left")
-        food_entry = ctk.CTkEntry(
-            food_frame, 
-            textvariable=self.food_per_player, 
-            width=100,
-            fg_color=POKER_COLORS["dark_green"],
-            border_color=POKER_COLORS["accent_green"]
-        )
-        food_entry.pack(side="right")
-        
-        # Bounty pool entry
-        bounty_frame = ctk.CTkFrame(pool_frame, fg_color="transparent")
-        bounty_frame.pack(fill="x", padx=20, pady=(5, 15))
-        
-        ctk.CTkLabel(
-            bounty_frame, 
-            text="Bounty per player ($):",
-            text_color=POKER_COLORS["card_white"]
-        ).pack(side="left")
-        bounty_entry = ctk.CTkEntry(
-            bounty_frame, 
-            textvariable=self.bounty_per_player, 
-            width=100,
-            fg_color=POKER_COLORS["dark_green"],
-            border_color=POKER_COLORS["accent_green"]
-        )
-        bounty_entry.pack(side="right")
+        self.total_per_player_label.pack(side="right", padx=15, pady=8)
         
     def create_weights_section(self, parent):
         """Create the payout weights configuration section"""
         weights_frame = ctk.CTkFrame(parent, fg_color=POKER_COLORS["light_green"])
         weights_frame.pack(fill="x", pady=(0, 15), padx=20)
         
-        weights_title = ctk.CTkLabel(
-            weights_frame, 
-            text="⚖️ Payout Weights", 
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=POKER_COLORS["card_white"]
-        )
-        weights_title.pack(pady=(15, 10))
+        self.create_title_label(weights_frame, "Payout Weights", "⚖️", size=16, pady=(15, 10))
         
         # Current weights display
-        self.weights_summary = ctk.CTkLabel(
+        self.weights_summary = self.create_label(
             weights_frame,
-            text=self.get_weights_summary(),
-            font=ctk.CTkFont(size=12),
-            text_color=POKER_COLORS["gold"],
-            justify="left"
+            self.get_weights_summary(),
+            size=12,
+            color="gold"
         )
-        self.weights_summary.pack(pady=5, padx=20)
+        self.weights_summary.pack(pady=5, padx=20, anchor="w")
         
         # Weights control buttons
         weights_btn_frame = ctk.CTkFrame(weights_frame, fg_color="transparent")
@@ -285,13 +312,12 @@ class PokerPayoutCalculator:
     def setup_bank(self, parent):
         """Setup the bank panel for tracking player payments"""
         # Bank title
-        bank_title = ctk.CTkLabel(
+        bank_title = self.create_title_label(
             parent,
-            text="🏦 Bank Tracker",
-            font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=POKER_COLORS["gold"]
+            "Bank Tracker",
+            "🏦",
+            pady=(20, 10)
         )
-        bank_title.pack(pady=(20, 10))
         
         # Pool summary section
         pool_summary_frame = ctk.CTkFrame(parent, fg_color=POKER_COLORS["light_green"])
@@ -343,7 +369,9 @@ class PokerPayoutCalculator:
                 'buy_in': tk.BooleanVar(value=False),
                 'food': tk.BooleanVar(value=False),
                 'bounty': tk.BooleanVar(value=False),
-                'all': tk.BooleanVar(value=False)
+                'all': tk.BooleanVar(value=False),
+                'eliminated': tk.BooleanVar(value=False),
+                'payed_out': tk.BooleanVar(value=False)
             })
         
         # Remove excess players
@@ -359,6 +387,42 @@ class PokerPayoutCalculator:
         for widget in self.bank_scroll.winfo_children():
             widget.destroy()
         
+        # Create header row with labels
+        header_frame = ctk.CTkFrame(self.bank_scroll, fg_color=POKER_COLORS["medium_green"])
+        header_frame.pack(fill="x", pady=(0, 5), padx=5)
+        
+        # Player name label
+        ctk.CTkLabel(
+            header_frame,
+            text="Player Name",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=POKER_COLORS["card_white"],
+            width=120
+        ).pack(side="left", padx=(5, 10), pady=5)
+        
+        # Labels frame for checkboxes
+        labels_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        labels_frame.pack(side="right", padx=5, pady=5)
+        
+        # Checkbox labels
+        labels = [
+            ("Buy-In", POKER_COLORS["card_white"]),
+            ("Food", POKER_COLORS["card_white"]),
+            ("Bounty", POKER_COLORS["card_white"]),
+            ("All", POKER_COLORS["gold"]),
+            ("❌", "#DC143C"),  # Red X for eliminated
+            ("⭐", "#FFD700")   # Gold star for payed out
+        ]
+        
+        for label_text, color in labels:
+            ctk.CTkLabel(
+                labels_frame,
+                text=label_text,
+                font=ctk.CTkFont(size=9, weight="bold"),
+                text_color=color,
+                width=36
+            ).pack(side="left", padx=0)
+        
         # Create player rows
         for i, player in enumerate(self.player_data):
             self.create_player_row(i, player)
@@ -369,7 +433,7 @@ class PokerPayoutCalculator:
     def create_player_row(self, index, player):
         """Create a row for a player with name entry and checkboxes"""
         player_frame = ctk.CTkFrame(self.bank_scroll, fg_color=POKER_COLORS["dark_green"])
-        player_frame.pack(fill="x", pady=2, padx=5)
+        player_frame.pack(fill="x", pady=1, padx=5)
         
         # Player name entry
         name_var = tk.StringVar(value=player['name'])
@@ -379,66 +443,111 @@ class PokerPayoutCalculator:
             player_frame,
             textvariable=name_var,
             width=120,
+            height=28,
             fg_color=POKER_COLORS["felt_green"],
             border_color=POKER_COLORS["accent_green"]
         )
-        name_entry.pack(side="left", padx=5, pady=5)
+        name_entry.pack(side="left", padx=(5, 10), pady=3)
         
         # Checkboxes frame
         checks_frame = ctk.CTkFrame(player_frame, fg_color="transparent")
-        checks_frame.pack(side="right", padx=5, pady=5)
+        checks_frame.pack(side="right", padx=5, pady=3)
         
         # Buy-in checkbox
         buy_in_check = ctk.CTkCheckBox(
             checks_frame,
-            text="Buy-in",
+            text="",
             variable=player['buy_in'],
             command=lambda: self.on_checkbox_change(index),
-            width=60,
-            text_color=POKER_COLORS["card_white"],
+            width=20,
+            height=20,
+            checkbox_width=18,
+            checkbox_height=18,
             fg_color=POKER_COLORS["accent_green"],
-            hover_color=POKER_COLORS["medium_green"]
+            hover_color=POKER_COLORS["medium_green"],
+            checkmark_color=POKER_COLORS["dark_green"]
         )
-        buy_in_check.pack(side="left", padx=2)
+        buy_in_check.pack(side="left", padx=8)
         
         # Food checkbox
         food_check = ctk.CTkCheckBox(
             checks_frame,
-            text="Food",
+            text="",
             variable=player['food'],
             command=lambda: self.on_checkbox_change(index),
-            width=50,
-            text_color=POKER_COLORS["card_white"],
+            width=20,
+            height=20,
+            checkbox_width=18,
+            checkbox_height=18,
             fg_color=POKER_COLORS["accent_green"],
-            hover_color=POKER_COLORS["medium_green"]
+            hover_color=POKER_COLORS["medium_green"],
+            checkmark_color=POKER_COLORS["dark_green"]
         )
-        food_check.pack(side="left", padx=2)
+        food_check.pack(side="left", padx=8)
         
         # Bounty checkbox
         bounty_check = ctk.CTkCheckBox(
             checks_frame,
-            text="Bounty",
+            text="",
             variable=player['bounty'],
             command=lambda: self.on_checkbox_change(index),
-            width=60,
-            text_color=POKER_COLORS["card_white"],
+            width=20,
+            height=20,
+            checkbox_width=18,
+            checkbox_height=18,
             fg_color=POKER_COLORS["accent_green"],
-            hover_color=POKER_COLORS["medium_green"]
+            hover_color=POKER_COLORS["medium_green"],
+            checkmark_color=POKER_COLORS["dark_green"]
         )
-        bounty_check.pack(side="left", padx=2)
+        bounty_check.pack(side="left", padx=8)
         
         # All checkbox
         all_check = ctk.CTkCheckBox(
             checks_frame,
-            text="All",
+            text="",
             variable=player['all'],
             command=lambda: self.on_all_checkbox_change(index),
-            width=40,
-            text_color=POKER_COLORS["gold"],
+            width=20,
+            height=20,
+            checkbox_width=18,
+            checkbox_height=18,
             fg_color=POKER_COLORS["gold"],
-            hover_color=POKER_COLORS["accent_green"]
+            hover_color=POKER_COLORS["accent_green"],
+            checkmark_color=POKER_COLORS["dark_green"]
         )
-        all_check.pack(side="left", padx=2)
+        all_check.pack(side="left", padx=8)
+        
+        # Eliminated checkbox (red X when checked)
+        eliminated_check = ctk.CTkCheckBox(
+            checks_frame,
+            text="",
+            variable=player['eliminated'],
+            command=lambda: self.update_pool_summary(),
+            width=20,
+            height=20,
+            checkbox_width=18,
+            checkbox_height=18,
+            fg_color="#DC143C",  # Crimson red
+            hover_color="#B22222",  # Dark red
+            checkmark_color=POKER_COLORS["dark_green"]
+        )
+        eliminated_check.pack(side="left", padx=8)
+        
+        # Payed out checkbox (gold star effect)
+        payed_out_check = ctk.CTkCheckBox(
+            checks_frame,
+            text="",
+            variable=player['payed_out'],
+            command=lambda: self.update_pool_summary(),
+            width=20,
+            height=20,
+            checkbox_width=18,
+            checkbox_height=18,
+            fg_color="#FFD700",  # Gold
+            hover_color="#FFA500",  # Orange
+            checkmark_color=POKER_COLORS["dark_green"]
+        )
+        payed_out_check.pack(side="left", padx=8)
         
     def on_player_name_change(self, index, new_name):
         """Handle player name change"""
@@ -457,7 +566,7 @@ class PokerPayoutCalculator:
             self.update_pool_summary()
         
     def on_all_checkbox_change(self, index):
-        """Handle 'All' checkbox change"""
+        """Handle 'All' checkbox change - only affects payment checkboxes"""
         if index < len(self.player_data):
             player = self.player_data[index]
             all_checked = player['all'].get()
@@ -468,43 +577,63 @@ class PokerPayoutCalculator:
         
     def update_pool_summary(self):
         """Update the pool summary display"""
-        # Calculate totals
-        num_players = self.num_players.get()
-        buy_in = self.buy_in.get()
-        food_per_player = self.food_per_player.get()
-        bounty_per_player = self.bounty_per_player.get()
-        
-        total_pool = num_players * (buy_in + food_per_player + bounty_per_player)
-        
-        # Calculate total paid
-        total_paid = 0
-        for player in self.player_data:
-            if player['buy_in'].get():
-                total_paid += buy_in
-            if player['food'].get():
-                total_paid += food_per_player
-            if player['bounty'].get():
-                total_paid += bounty_per_player
-        
-        # Calculate percentage
-        percent_paid = (total_paid / total_pool * 100) if total_pool > 0 else 0
-        
-        # Update labels
-        self.total_pool_label.configure(text=f"Total Pool: ${total_pool:.2f}")
-        self.total_paid_label.configure(text=f"Total Paid: ${total_paid:.2f}")
-        
-        # Color code the percentage based on completion
-        if percent_paid >= 100:
-            color = POKER_COLORS["accent_green"]
-        elif percent_paid >= 75:
-            color = POKER_COLORS["gold"]
-        else:
-            color = POKER_COLORS["card_white"]
+        try:
+            # Calculate totals using safe value retrieval
+            num_players = self.num_players.get()
+            buy_in = self.safe_get_value(self.buy_in)
+            food_per_player = self.safe_get_value(self.food_per_player)
+            bounty_per_player = self.safe_get_value(self.bounty_per_player)
             
-        self.percent_paid_label.configure(
-            text=f"Percent Paid: {percent_paid:.1f}%",
-            text_color=color
-        )
+            total_pool = num_players * (buy_in + food_per_player + bounty_per_player)
+            
+            # Calculate total paid and player statistics
+            total_paid = 0
+            eliminated_count = 0
+            payed_out_count = 0
+            
+            for player in self.player_data:
+                if player['buy_in'].get():
+                    total_paid += buy_in
+                if player['food'].get():
+                    total_paid += food_per_player
+                if player['bounty'].get():
+                    total_paid += bounty_per_player
+                if player['eliminated'].get():
+                    eliminated_count += 1
+                if player['payed_out'].get():
+                    payed_out_count += 1
+            
+            # Calculate percentage
+            percent_paid = (total_paid / total_pool * 100) if total_pool > 0 else 0
+            
+            # Update labels
+            self.total_pool_label.configure(text=f"Total Pool: ${total_pool:.2f}")
+            self.total_paid_label.configure(text=f"Total Paid: ${total_paid:.2f}")
+            
+            # Color code the percentage based on completion
+            if percent_paid >= 100:
+                color = POKER_COLORS["accent_green"]
+            elif percent_paid >= 75:
+                color = POKER_COLORS["gold"]
+            else:
+                color = POKER_COLORS["card_white"]
+                
+            # Update percent label with additional stats
+            remaining_players = num_players - eliminated_count
+            percent_text = f"Paid: {percent_paid:.1f}% | Active: {remaining_players} | Paid Out: {payed_out_count}"
+            
+            self.percent_paid_label.configure(
+                text=percent_text,
+                text_color=color
+            )
+        except Exception as e:
+            # Handle any errors gracefully
+            if hasattr(self, 'total_pool_label'):
+                self.total_pool_label.configure(text="Total Pool: $0.00")
+            if hasattr(self, 'total_paid_label'):
+                self.total_paid_label.configure(text="Total Paid: $0.00")
+            if hasattr(self, 'percent_paid_label'):
+                self.percent_paid_label.configure(text="Paid: 0% | Active: 0 | Paid Out: 0")
         
     def get_position_suffix(self, position: int) -> str:
         """Get the appropriate suffix for position numbers"""
@@ -527,6 +656,9 @@ class PokerPayoutCalculator:
         # Update bank summary if bank exists
         if hasattr(self, 'total_pool_label'):
             self.update_pool_summary()
+        # Update total per player display
+        if hasattr(self, 'total_per_player_label'):
+            self.update_total_per_player()
     
     def get_weights_summary(self):
         """Get a summary string of current weights"""
@@ -540,6 +672,22 @@ class PokerPayoutCalculator:
             summary += f"... (+{len(self.current_weights) - 5} more)"
         return summary
     
+    def update_total_per_player(self):
+        """Update the total amount due per player display"""
+        try:
+            # Get current values using safe retrieval
+            buy_in = self.safe_get_value(self.buy_in)
+            food_per_player = self.safe_get_value(self.food_per_player)
+            bounty_per_player = self.safe_get_value(self.bounty_per_player)
+            
+            total_per_player = buy_in + food_per_player + bounty_per_player
+            
+            if hasattr(self, 'total_per_player_label'):
+                self.total_per_player_label.configure(text=f"${total_per_player:.2f}")
+        except (ValueError, AttributeError):
+            if hasattr(self, 'total_per_player_label'):
+                self.total_per_player_label.configure(text="$0.00")
+    
     def calculate_payouts(self):
         """Calculate and display tournament payouts"""
         try:
@@ -547,11 +695,11 @@ class PokerPayoutCalculator:
             for widget in self.results_scroll.winfo_children():
                 widget.destroy()
             
-            # Get current values
+            # Get current values using safe retrieval
             num_players = self.num_players.get()
-            buy_in = self.buy_in.get()
-            food_per_player = self.food_per_player.get()
-            bounty_per_player = self.bounty_per_player.get()
+            buy_in = self.safe_get_value(self.buy_in)
+            food_per_player = self.safe_get_value(self.food_per_player)
+            bounty_per_player = self.safe_get_value(self.bounty_per_player)
             
             # Calculate pools
             prize_pool = num_players * buy_in
@@ -720,6 +868,223 @@ class PokerPayoutCalculator:
         self.current_weights = new_weights
         self.weights_summary.configure(text=self.get_weights_summary())
         self.calculate_payouts()
+        
+    def setup_timer(self, parent):
+        """Setup the blind timer panel"""
+        # Timer title
+        timer_title = self.create_title_label(
+            parent,
+            "Blind Timer",
+            "⏰",
+            pady=(15, 10)
+        )
+        
+        # Game duration setting
+        duration_frame = ctk.CTkFrame(parent, fg_color=POKER_COLORS["light_green"])
+        duration_frame.pack(fill="x", padx=15, pady=(0, 10))
+        
+        ctk.CTkLabel(
+            duration_frame,
+            text="Game Duration (minutes):",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=POKER_COLORS["card_white"]
+        ).pack(pady=(10, 5))
+        
+        duration_entry = ctk.CTkEntry(
+            duration_frame,
+            textvariable=self.game_duration,
+            width=100,
+            fg_color=POKER_COLORS["dark_green"],
+            border_color=POKER_COLORS["accent_green"],
+            justify="center"
+        )
+        duration_entry.pack(pady=(0, 10))
+        
+        # Timer mode selection
+        mode_frame = ctk.CTkFrame(duration_frame, fg_color="transparent")
+        mode_frame.pack(pady=(0, 10))
+        
+        countdown_radio = ctk.CTkRadioButton(
+            mode_frame,
+            text="Countdown",
+            variable=self.timer_direction,
+            value="countdown",
+            command=self.reset_timer,
+            fg_color=POKER_COLORS["accent_green"],
+            hover_color=POKER_COLORS["medium_green"],
+            text_color=POKER_COLORS["card_white"]
+        )
+        countdown_radio.pack(side="left", padx=5)
+        
+        countup_radio = ctk.CTkRadioButton(
+            mode_frame,
+            text="Count Up",
+            variable=self.timer_direction,
+            value="countup",
+            command=self.reset_timer,
+            fg_color=POKER_COLORS["accent_green"],
+            hover_color=POKER_COLORS["medium_green"],
+            text_color=POKER_COLORS["card_white"]
+        )
+        countup_radio.pack(side="left", padx=5)
+        
+        # Timer display
+        timer_display_frame = ctk.CTkFrame(parent, fg_color=POKER_COLORS["felt_green"])
+        timer_display_frame.pack(fill="x", padx=15, pady=10)
+        
+        self.timer_display = ctk.CTkLabel(
+            timer_display_frame,
+            text="3:00:00",
+            font=ctk.CTkFont(size=36, weight="bold"),
+            text_color=POKER_COLORS["gold"]
+        )
+        self.timer_display.pack(pady=20)
+        
+        # Progress bar
+        self.timer_progress = ctk.CTkProgressBar(
+            timer_display_frame,
+            width=280,
+            height=15,
+            fg_color=POKER_COLORS["dark_green"],
+            progress_color=POKER_COLORS["accent_green"]
+        )
+        self.timer_progress.pack(pady=(0, 15))
+        
+        # Timer control buttons
+        button_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        button_frame.pack(pady=10)
+        
+        self.start_pause_btn = ctk.CTkButton(
+            button_frame,
+            text="▶️ Start",
+            command=self.toggle_timer,
+            fg_color=POKER_COLORS["accent_green"],
+            hover_color=POKER_COLORS["medium_green"],
+            width=80
+        )
+        self.start_pause_btn.pack(side="left", padx=5)
+        
+        reset_btn = ctk.CTkButton(
+            button_frame,
+            text="🔄 Reset",
+            command=self.reset_timer,
+            fg_color=POKER_COLORS["medium_green"],
+            hover_color=POKER_COLORS["dark_green"],
+            width=80
+        )
+        reset_btn.pack(side="left", padx=5)
+        
+        # Initialize timer display
+        self.update_timer_display()
+
+    def setup_blinds(self, parent):
+        """Setup the blinds panel"""
+        # Blinds title
+        blinds_title = self.create_title_label(
+            parent,
+            "Blinds",
+            "🎯",
+            pady=(15, 10)
+        )
+        
+        # Placeholder content for now
+        placeholder_label = self.create_label(
+            parent,
+            "Blind structure configuration\ncoming soon...",
+            size=14
+        )
+        placeholder_label.pack(expand=True)
+
+    def toggle_timer(self):
+        """Start or pause the timer"""
+        if self.timer_running:
+            self.pause_timer()
+        else:
+            self.start_timer()
+
+    def start_timer(self):
+        """Start the timer"""
+        self.timer_running = True
+        self.start_pause_btn.configure(text="⏸️ Pause")
+        self.update_timer()
+
+    def pause_timer(self):
+        """Pause the timer"""
+        self.timer_running = False
+        self.start_pause_btn.configure(text="▶️ Start")
+        if self.timer_job:
+            self.root.after_cancel(self.timer_job)
+
+    def reset_timer(self):
+        """Reset the timer"""
+        self.pause_timer()
+        if self.timer_direction.get() == "countdown":
+            self.current_time = self.game_duration.get() * 60  # Convert to seconds
+        else:
+            self.current_time = 0
+        self.update_timer_display()
+
+    def update_timer(self):
+        """Update the timer every second"""
+        if self.timer_running:
+            if self.timer_direction.get() == "countdown":
+                self.current_time -= 1
+                if self.current_time <= 0:
+                    self.current_time = 0
+                    self.pause_timer()
+                    self.flash_timer_red()
+            else:
+                self.current_time += 1
+                max_time = self.game_duration.get() * 60
+                if self.current_time >= max_time:
+                    self.current_time = max_time
+                    self.pause_timer()
+                    self.flash_timer_red()
+            
+            self.update_timer_display()
+            self.timer_job = self.root.after(1000, self.update_timer)
+
+    def update_timer_display(self):
+        """Update the timer display and progress bar"""
+        # Format time display
+        hours = self.current_time // 3600
+        minutes = (self.current_time % 3600) // 60
+        seconds = self.current_time % 60
+        time_str = f"{hours}:{minutes:02d}:{seconds:02d}"
+        
+        self.timer_display.configure(text=time_str)
+        
+        # Update progress bar
+        total_time = self.game_duration.get() * 60
+        if total_time > 0:
+            if self.timer_direction.get() == "countdown":
+                progress = 1 - (self.current_time / total_time)
+            else:
+                progress = self.current_time / total_time
+            self.timer_progress.set(progress)
+        else:
+            self.timer_progress.set(0)
+        
+        # Change color based on time remaining
+        if self.timer_direction.get() == "countdown":
+            time_remaining_ratio = self.current_time / (self.game_duration.get() * 60) if self.game_duration.get() > 0 else 0
+            if time_remaining_ratio <= 0.1:  # Last 10%
+                self.timer_display.configure(text_color="#FF4444")  # Red
+            elif time_remaining_ratio <= 0.25:  # Last 25%
+                self.timer_display.configure(text_color="#FFA500")  # Orange
+            else:
+                self.timer_display.configure(text_color=POKER_COLORS["gold"])
+        else:
+            self.timer_display.configure(text_color=POKER_COLORS["gold"])
+
+    def flash_timer_red(self):
+        """Flash the timer red when time is up"""
+        def flash(count=0):
+            if count < 6:  # Flash 3 times
+                color = "#FF0000" if count % 2 == 0 else POKER_COLORS["gold"]
+                self.timer_display.configure(text_color=color)
+                self.root.after(300, lambda: flash(count + 1))
+        flash()
         
     def run(self):
         """Start the application"""
