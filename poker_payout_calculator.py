@@ -219,14 +219,17 @@ class PokerPayoutCalculator:
             from_=3,
             to=30,
             number_of_steps=27,
-            variable=self.num_players,
-            command=self.on_player_change,
             fg_color=POKER_COLORS["dark_green"],
             progress_color=POKER_COLORS["accent_green"],
             button_color=POKER_COLORS["gold"],
             button_hover_color=POKER_COLORS["gold"]
         )
+        self.player_slider.set(self.num_players.get())  # Set initial value manually
         self.player_slider.pack(pady=5, padx=20, fill="x")
+        
+        # Bind mouse events for optimized updates
+        self.player_slider.bind("<ButtonRelease-1>", self.on_player_slider_release)
+        self.player_slider.bind("<B1-Motion>", self.on_player_slider_drag)
         
         # Player count display
         self.player_count_label = ctk.CTkLabel(
@@ -644,11 +647,30 @@ class PokerPayoutCalculator:
         return f"{position}{suffix}"
     
     def on_player_change(self, value):
-        """Handle player count slider change"""
+        """Handle player count slider change - optimized for final value only"""
         player_count = int(value)
         self.player_count_label.configure(text=f"Players: {player_count}")
+        # Update the variable without triggering trace callbacks
+        self.num_players.set(player_count)
         self.update_player_data()  # Update bank data when player count changes
         self.calculate_payouts()
+    
+    def on_player_slider_drag(self, event):
+        """Handle slider drag - only update display label for performance"""
+        try:
+            current_value = self.player_slider.get()
+            player_count = int(current_value)
+            self.player_count_label.configure(text=f"Players: {player_count}")
+        except:
+            pass
+    
+    def on_player_slider_release(self, event):
+        """Handle slider release - perform full update"""
+        try:
+            current_value = self.player_slider.get()
+            self.on_player_change(current_value)
+        except:
+            pass
     
     def on_value_change(self, *args):
         """Handle any value change that requires recalculation"""
